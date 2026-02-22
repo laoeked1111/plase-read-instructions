@@ -1,0 +1,117 @@
+<html>
+    <head></head>
+    <body>
+        <input id="ping_url">
+        <h2 id="stat"></h2>
+        <p id="res"></p>
+        <script>
+            let recording = false;
+            let mediaRecorder;
+            let audioChunks = [];
+            let recognition;
+
+            // Initialize Speech Recognition
+            if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+                const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+                recognition = new SpeechRecognition();
+                recognition.continuous = true;
+                recognition.interimResults = false;
+
+                recognition.onresult = (event) => {
+                    const transcript = Array.from(event.results)
+                        .map(result => result[0].transcript)
+                        .join(' ');
+                    fetch(document.getElementById("ping_url").value+'/process', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ transcript: transcript })
+                    })
+                    .then(res => res.json())
+                    .then(data => console.log('Processed:', data))
+                    .catch(err => console.error('Error processing:', err));
+                };
+
+                recognition.onerror = (event) => {
+                    console.error('Speech recognition error:', event.error);
+                    // Handle network errors by restarting recognition
+                    if (event.error === 'network' && recording) {
+                        console.log('Network error, restarting recognition...');
+                        setTimeout(() => {
+                            if (recording && recognition) {
+                                try {
+                                    recognition.start();
+                                } catch (e) {
+                                    console.error('Failed to restart recognition:', e);
+                                }
+                            }
+                        }, 1000);
+                    }
+                };
+
+                recognition.onend = () => {
+                    // Automatically restart if still recording
+                    if (recording) {
+                        try {
+                            recognition.start();
+                        } catch (e) {
+                            console.error('Failed to restart recognition:', e);
+                        }
+                    }
+                };
+            }
+
+            async function startRecording() {
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    mediaRecorder = new MediaRecorder(stream);
+                    audioChunks = [];
+                    mediaRecorder.ondataavailable = (event) => {
+                        audioChunks.push(event.data);
+                    };
+                    mediaRecorder.onstop = () => {
+                        stream.getTracks().forEach(track => track.stop());
+                    };
+                    mediaRecorder.start();
+                    if (recognition) {
+                        recognition.start();
+                    }
+                    recording = true;
+                    console.log('Recording started');
+                } catch (err) {
+                    console.error('Error starting recording:', err);
+                }
+            }
+
+            function stopRecording() {
+                if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                    mediaRecorder.stop();
+                }
+                if (recognition) {
+                    recognition.stop();
+                }
+                recording = false;
+                console.log('Recording stopped');
+            }
+
+            setInterval(() => {
+                fetch(document.getElementById("ping_url").value+'/status')
+                    .then(res => res.json())
+                    .then(stat => {
+                        document.getElementById('stat').value = 'recording: ' + stat.active;
+                        if (stat.active && !recording) {
+                            startRecording();
+                        }
+                        else if (!stat.active && recording) {
+                            stopRecording();
+                        }
+                    })
+                    .catch(err => {
+                        console.error('Error fetching status:', err);
+                        document.getElementById('stat').value = 'Error: Cannot connect to server';
+                    });
+            }, 500);
+        </script>
+    </body>
+</html>
